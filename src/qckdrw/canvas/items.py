@@ -26,7 +26,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qckdrw.canvas.commands import EditTextCommand, MoveItemCommand, ResizeItemCommand
+from qckdrw.canvas.commands import (
+    EditTextCommand,
+    MoveItemCommand,
+    ResizeItemCommand,
+    ScalableItemMixin,
+)
 
 _MIN_SIZE = 1.0
 _HANDLE_SIZE = 8.0
@@ -299,16 +304,17 @@ class ResizablePixmapItem(QGraphicsObject):
         return item
 
 
-class EditableTextItem(QGraphicsTextItem):
-    """Movable plain text that enters editing only on a double-click."""
+class EditableTextItem(ScalableItemMixin, QGraphicsTextItem):
+    """Movable, resizable plain text that edits on a double-click."""
 
     done_requested = Signal()
 
     def __init__(self, text: str) -> None:
         super().__init__(text)
+        self._init_scalable_item()
+        self.setDefaultTextColor(QColor(Qt.GlobalColor.black))
         self._editing = False
         self._text_before_edit = text
-        self._press_position = QPointF()
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -319,20 +325,12 @@ class EditableTextItem(QGraphicsTextItem):
     def editing(self) -> bool:
         return self._editing
 
-    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
-        self._press_position = self.pos()
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
-        super().mouseReleaseEvent(event)
-        if not self._editing and self.pos() != self._press_position:
-            _push_undo(self, MoveItemCommand(self, self._press_position, self.pos()))
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:
-        self._begin_editing()
+        self.begin_editing()
         super().mouseDoubleClickEvent(event)
 
-    def _begin_editing(self) -> None:
+    def begin_editing(self) -> None:
         if self._editing:
             return
         self._editing = True
@@ -395,6 +393,7 @@ class EditableTextItem(QGraphicsTextItem):
             "font": self.font().toString(),
             "color": int(self.defaultTextColor().rgba()),
             "position": {"x": self.pos().x(), "y": self.pos().y()},
+            "scale": self.scale(),
         }
 
     @classmethod
@@ -414,8 +413,12 @@ class EditableTextItem(QGraphicsTextItem):
             raise ValueError("Invalid text color") from error
         if not color.isValid():
             raise ValueError("Invalid text color")
+        scale = _finite_number(record.get("scale", 1.0), "text scale")
+        if scale <= 0.0:
+            raise ValueError("Text scale must be positive")
         item = cls(text)
         item.setFont(font)
         item.setDefaultTextColor(color)
         item.setPos(_position_from_record(record))
+        item.setScale(scale)
         return item

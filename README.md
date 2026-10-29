@@ -1,6 +1,6 @@
 # Quick Canvas
 
-Quick Canvas is a small tray/menu-bar drawing canvas for Windows and macOS. It renders a fixed 1200 × 800 canvas and copies the finished result to the system clipboard as an opaque white image.
+Quick Canvas is a small tray/menu-bar drawing canvas for Windows and macOS. The canvas follows the window's drawing area size and copies the finished result to the system clipboard as an opaque white image at those dimensions.
 
 ## Install and run from source
 
@@ -21,11 +21,14 @@ This registration intentionally takes precedence over the usual browser zoom-res
 ## Use
 
 - **Draw:** click once to start, move the pointer without holding a button, and click again to finish. A click without movement makes a dot. Pointer positions are recorded directly as straight path segments: there is no smoothing, prediction, or correction. Rendering only antialiases the stroke edges.
+- **Text:** choose Text, click the canvas, and type. The tool switches to Select automatically. Click elsewhere to finish editing; double-click text to edit it again.
 - **Select:** select and move strokes, images, or text.
 - **Paste:** use the toolbar button or the platform paste shortcut. Clipboard images and local image files become movable, resizable items; plain text becomes movable text. Double-click text to edit it.
 - **Resize an image:** its eight handles appear when selected. Corner handles preserve aspect ratio; hold **Shift** while dragging a corner for free-form resizing. Edge handles resize on one axis.
+- **Resize strokes or text:** select an item and drag any of its eight handles. These items scale proportionally, including stroke thickness and text size. Resizing and moving support Undo/Redo.
+- **Resize the canvas:** resize the window to change the drawing area and copied image dimensions. Existing items retain their size and position; shrinking the canvas clips the exported area without deleting items. Unfinished documents retain their canvas and item sizes when reopened.
 - **Undo/Redo:** use the toolbar buttons or the standard platform shortcuts (including Ctrl+Y and Shift+Ctrl+Z on Windows).
-- **Done:** click **Done**, or press the platform primary modifier (**Ctrl** on Windows, **Cmd** on macOS) with **Return** or keypad **Enter**. The complete 1200 × 800 white image is placed on the system clipboard, the window hides, and the next activation opens a fresh canvas.
+- **Done:** click **Done**, or press the platform primary modifier (**Ctrl** on Windows, **Cmd** on macOS) with **Return** or keypad **Enter**. The complete white canvas image at the current canvas dimensions is placed on the system clipboard, the window hides, and the next activation opens a fresh canvas.
 
 Closing the window, pressing **Escape**, minimizing it, or otherwise hiding it does **not** finish the document or change the clipboard. The in-progress document is serialized in memory and restored on the next activation; an active stroke is committed first. Choosing **Quit** from the tray/menu-bar menu exits the process and discards any unsaved in-process document.
 

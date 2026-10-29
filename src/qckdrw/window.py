@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -10,14 +10,14 @@ from PySide6.QtGui import (
     QImageReader,
     QKeySequence,
     QPixmap,
-    QResizeEvent,
+    QShowEvent,
 )
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QToolBar
 from qckdrw.clipboard import copy_canvas
 
 from qckdrw.canvas.items import EditableTextItem, ResizablePixmapItem
 from qckdrw.canvas.scene import CanvasScene
-from qckdrw.canvas.view import CanvasView
+from qckdrw.canvas.view import CanvasView, Tool
 
 
 class CanvasWindow(QMainWindow):
@@ -39,7 +39,15 @@ class CanvasWindow(QMainWindow):
         self.scene = CanvasScene(self)
         if document is not None:
             self.scene.restore_document(document)
-        self.view = CanvasView(self.scene)
+            self._restored_viewport_size: QSize | None = (
+                self.scene.sceneRect().size().toSize()
+            )
+        else:
+            self._restored_viewport_size = None
+        self.view = CanvasView(
+            self.scene,
+            track_canvas_size=self._restored_viewport_size is None,
+        )
         self.setCentralWidget(self.view)
 
         self._toolbar = QToolBar("Canvas tools", self)
@@ -56,7 +64,23 @@ class CanvasWindow(QMainWindow):
         self.setMinimumSize(640, 460)
         available = self.screen().availableGeometry()
         self.resize(min(1000, available.width()), min(740, available.height()))
-        self._fit_canvas()
+        if self._restored_viewport_size is not None:
+            self._resize_for_viewport(self._restored_viewport_size)
+
+    def _resize_for_viewport(self, target: QSize) -> None:
+        layout = self.layout()
+        for _ in range(2):
+            layout.activate()
+            current = self.view.viewport().size()
+            width_delta = target.width() - current.width()
+            height_delta = target.height() - current.height()
+            if width_delta == 0 and height_delta == 0:
+                return
+            self.resize(
+                self.width() + width_delta,
+                self.height() + height_delta,
+            )
+
 
     def _create_actions(self) -> None:
         tools = QActionGroup(self)
@@ -73,6 +97,13 @@ class CanvasWindow(QMainWindow):
         tools.addAction(self._draw_action)
         self._toolbar.addAction(self._draw_action)
 
+        self._text_action = QAction("Text", self)
+        self._text_action.setCheckable(True)
+        self._text_action.setToolTip("Add text to the canvas")
+        self._text_action.setStatusTip(self._text_action.toolTip())
+        tools.addAction(self._text_action)
+        self._toolbar.addAction(self._text_action)
+
         self._select_action = QAction("Select", self)
         self._select_action.setCheckable(True)
         self._select_action.setToolTip("Select and manipulate canvas items")
@@ -80,11 +111,16 @@ class CanvasWindow(QMainWindow):
         tools.addAction(self._select_action)
         self._toolbar.addAction(self._select_action)
 
-        self._draw_action.triggered.connect(lambda checked: checked and self._set_tool("draw"))
+        self._draw_action.triggered.connect(
+            lambda checked: checked and self._set_tool("draw")
+        )
+        self._text_action.triggered.connect(
+            lambda checked: checked and self._set_tool("text")
+        )
         self._select_action.triggered.connect(
             lambda checked: checked and self._set_tool("select")
         )
-        self.view.set_tool("draw")
+        self.view.tool_changed.connect(self._sync_tool_ui)
 
         self._toolbar.addSeparator()
         self._undo_action = self.scene.undo_stack.createUndoAction(self, "Undo")
@@ -120,23 +156,36 @@ class CanvasWindow(QMainWindow):
         self._done_action.triggered.connect(self.finish)
         self._toolbar.addAction(self._done_action)
 
-
         self._dismiss_action = QAction(self)
         self._dismiss_action.setShortcut(QKeySequence(Qt.Key.Key_Escape))
         self._dismiss_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self._dismiss_action.triggered.connect(self._request_dismissal)
         self.addAction(self._dismiss_action)
 
-    def _set_tool(self, tool: str) -> None:
+    def _set_tool(self, tool: Tool) -> None:
         if self._released:
             return
         self.view.finish_stroke()
         self.scene.finish_editing()
         self.view.set_tool(tool)
+        self._sync_tool_ui(tool)
+
+    def _sync_tool_ui(self, tool: str) -> None:
+        actions = {
+            "draw": self._draw_action,
+            "text": self._text_action,
+            "select": self._select_action,
+        }
+        action = actions.get(tool)
+        if action is None:
+            return
+        action.setChecked(True)
         if tool == "draw":
             self.statusBar().showMessage(
                 "Draw: click once to start, move without holding a button, then click again to finish."
             )
+        elif tool == "text":
+            self.statusBar().showMessage("Text: click the canvas and start typing.")
         else:
             self.statusBar().showMessage("Select: click an item to select or move it.")
 
@@ -199,11 +248,7 @@ class CanvasWindow(QMainWindow):
         if not pasted_items:
             return
 
-        self.view.finish_stroke()
-        self.scene.finish_editing()
-        self._select_action.setChecked(True)
-        self.view.set_tool("select")
-        self.statusBar().showMessage("Select: click an item to select or move it.")
+        self._set_tool("select")
         for item in pasted_items:
             self.scene.add_pasted_item(item)
 
@@ -280,19 +325,18 @@ class CanvasWindow(QMainWindow):
         finally:
             self._releasing = False
 
-    def _fit_canvas(self) -> None:
-        if not self._released:
-            self.view.fitInView(
-                self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio
-            )
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._fit_canvas()
-
     def closeEvent(self, event: QCloseEvent) -> None:
         event.ignore()
         self._request_dismissal()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        target = self._restored_viewport_size
+        if target is None:
+            return
+        self._resize_for_viewport(target)
+        self._restored_viewport_size = None
+        self.view.set_canvas_size_tracking(True)
 
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)

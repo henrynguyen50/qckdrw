@@ -137,10 +137,27 @@ class CanvasScene(QGraphicsScene):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self._canvas_width = CANVAS_WIDTH
+        self._canvas_height = CANVAS_HEIGHT
         self.setSceneRect(QRectF(0.0, 0.0, CANVAS_WIDTH, CANVAS_HEIGHT))
         self.setBackgroundBrush(Qt.GlobalColor.white)
         self.undo_stack = QUndoStack(self)
         self._next_stroke_sequence = 0
+
+    def set_canvas_size(self, width: int, height: int) -> None:
+        """Set the exported canvas dimensions without transforming its items."""
+        if (
+            isinstance(width, bool)
+            or isinstance(height, bool)
+            or not isinstance(width, int)
+            or not isinstance(height, int)
+            or width <= 0
+            or height <= 0
+        ):
+            raise ValueError("Canvas dimensions must be positive integers")
+        self._canvas_width = width
+        self._canvas_height = height
+        self.setSceneRect(QRectF(0.0, 0.0, width, height))
 
     def allocate_stroke_sequence(self) -> int:
         sequence = self._next_stroke_sequence
@@ -206,7 +223,14 @@ class CanvasScene(QGraphicsScene):
             self._item_record(item)
             for item in self.items(Qt.SortOrder.AscendingOrder)
         ]
-        document = {"version": _DOCUMENT_VERSION, "items": records}
+        document = {
+            "version": _DOCUMENT_VERSION,
+            "canvas": {
+                "width": self._canvas_width,
+                "height": self._canvas_height,
+            },
+            "items": records,
+        }
         return json.dumps(
             document,
             ensure_ascii=False,
@@ -224,6 +248,25 @@ class CanvasScene(QGraphicsScene):
         records = decoded.get("items")
         if not isinstance(records, list):
             raise ValueError("Invalid canvas item list")
+
+        canvas = decoded.get("canvas")
+        if canvas is None:
+            canvas_width = CANVAS_WIDTH
+            canvas_height = CANVAS_HEIGHT
+        elif isinstance(canvas, dict):
+            canvas_width = canvas.get("width")
+            canvas_height = canvas.get("height")
+            if (
+                isinstance(canvas_width, bool)
+                or isinstance(canvas_height, bool)
+                or not isinstance(canvas_width, int)
+                or not isinstance(canvas_height, int)
+                or canvas_width <= 0
+                or canvas_height <= 0
+            ):
+                raise ValueError("Invalid canvas dimensions")
+        else:
+            raise ValueError("Invalid canvas dimensions")
 
         restored_items: list[QGraphicsItem] = []
         for sequence, record in enumerate(records):
@@ -267,6 +310,7 @@ class CanvasScene(QGraphicsScene):
             restored_items.append(item)
 
         self.release_resources()
+        self.set_canvas_size(canvas_width, canvas_height)
         for item in restored_items:
             self.addItem(item)
             self._connect_item(item)

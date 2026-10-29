@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Signal, Qt
 from PySide6.QtGui import (
     QColor,
     QHideEvent,
@@ -11,14 +11,14 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QResizeEvent,
-    QShowEvent,
 )
 from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsView, QWidget
 
-from qckdrw.canvas.commands import AddStrokeCommand
+from qckdrw.canvas.commands import AddItemCommand, AddStrokeCommand
+from qckdrw.canvas.items import EditableTextItem
 from qckdrw.canvas.scene import CanvasScene
 
-Tool = Literal["draw", "select"]
+Tool = Literal["draw", "text", "select"]
 _DOT_SEGMENT_LENGTH = 0.01
 
 
@@ -32,11 +32,19 @@ def _drawing_pen() -> QPen:
 
 
 class CanvasView(QGraphicsView):
-    """Canvas view implementing click-start, move, click-finish drawing."""
+    """Canvas viewport for drawing, text creation, and item selection."""
+    tool_changed = Signal(str)
 
-    def __init__(self, scene: CanvasScene, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        scene: CanvasScene,
+        parent: QWidget | None = None,
+        *,
+        track_canvas_size: bool = True,
+    ) -> None:
         super().__init__(scene, parent)
         self._canvas_scene = scene
+        self._track_canvas_size = track_canvas_size
         self._tool: Tool = "draw"
         self._active_path: QPainterPath | None = None
         self._preview: QGraphicsPathItem | None = None
@@ -62,7 +70,7 @@ class CanvasView(QGraphicsView):
         return self._tool
 
     def set_tool(self, tool: Tool) -> None:
-        if tool not in ("draw", "select"):
+        if tool not in ("draw", "text", "select"):
             raise ValueError(f"Unknown canvas tool: {tool}")
         if tool == self._tool:
             return
@@ -73,6 +81,7 @@ class CanvasView(QGraphicsView):
         else:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             self._canvas_scene.clearSelection()
+        self.tool_changed.emit(tool)
 
     def finish_stroke(self) -> None:
         if self._active_path is None:
@@ -129,6 +138,18 @@ class CanvasView(QGraphicsView):
             self._active_path.lineTo(point)
         self._preview.setPath(self._active_path)
 
+    def _create_text(self, point: QPointF) -> None:
+        item = EditableTextItem("")
+        item.setPos(point)
+        self._canvas_scene.clearSelection()
+        item.done_requested.connect(self._canvas_scene.completion_requested.emit)
+        self._canvas_scene.undo_stack.push(
+            AddItemCommand(self._canvas_scene, item, "Add text")
+        )
+        item.setSelected(True)
+        item.begin_editing()
+        self.set_tool("select")
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._tool == "select":
             super().mousePressEvent(event)
@@ -136,7 +157,9 @@ class CanvasView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             point = self._point_in_canvas(event)
             if point is not None:
-                if self.drawing:
+                if self._tool == "text":
+                    self._create_text(point)
+                elif self.drawing:
                     self._extend_stroke(point)
                     self.finish_stroke()
                 else:
@@ -149,7 +172,11 @@ class CanvasView(QGraphicsView):
         if self._tool == "select":
             super().mouseMoveEvent(event)
             return
-        if self.drawing and event.buttons() == Qt.MouseButton.NoButton:
+        if (
+            self._tool == "draw"
+            and self.drawing
+            and event.buttons() == Qt.MouseButton.NoButton
+        ):
             point = self._point_in_canvas(event)
             if point is not None:
                 self._extend_stroke(point)
@@ -161,21 +188,28 @@ class CanvasView(QGraphicsView):
             return
         event.accept()
 
+    def set_canvas_size_tracking(self, enabled: bool) -> None:
+        """Choose whether viewport resizes update the document dimensions."""
+        self._track_canvas_size = enabled
+        if enabled:
+            self._update_canvas_size()
+
+    def _update_canvas_size(self) -> None:
+        if not self._track_canvas_size or self.scene() is not self._canvas_scene:
+            return
+        viewport_size = self.viewport().size()
+        if viewport_size.width() <= 0 or viewport_size.height() <= 0:
+            return
+        self.resetTransform()
+        self._canvas_scene.set_canvas_size(
+            viewport_size.width(), viewport_size.height()
+        )
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._fit_canvas()
-
-    def showEvent(self, event: QShowEvent) -> None:
-        super().showEvent(event)
-        self._fit_canvas()
+        self._update_canvas_size()
 
     def hideEvent(self, event: QHideEvent) -> None:
         self.finish_stroke()
         super().hideEvent(event)
 
-    def _fit_canvas(self) -> None:
-        if not self._canvas_scene.sceneRect().isEmpty():
-            self.fitInView(
-                self._canvas_scene.sceneRect(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )

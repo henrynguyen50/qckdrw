@@ -48,6 +48,22 @@ class ClipboardRenderingTests(unittest.TestCase):
         pixels = bytes(rgba.constBits())
         self.assertTrue(all(alpha == 255 for alpha in pixels[3::4]))
 
+    def test_copy_uses_current_canvas_dimensions(self) -> None:
+        self.scene.set_canvas_size(640, 360)
+        self.scene.addRect(
+            QRectF(600.0, 320.0, 40.0, 40.0),
+            QPen(Qt.PenStyle.NoPen),
+            QColor("#5030a0"),
+        )
+
+        returned = copy_canvas(self.scene)
+        clipboard_image = QApplication.clipboard().image()
+
+        self.assertEqual(returned.size().width(), 640)
+        self.assertEqual(returned.size().height(), 360)
+        self.assertEqual(clipboard_image, returned)
+        self.assertEqual(clipboard_image.pixelColor(620, 340), QColor("#5030a0"))
+
     def test_antialiased_stroke_keeps_mixed_edge_pixels(self) -> None:
         path = QPainterPath(QPointF(100.0, 100.0))
         path.lineTo(240.0, 173.0)
@@ -128,6 +144,7 @@ class CanvasWindowCompletionTests(unittest.TestCase):
         source.fill(QColor("#c03050"))
         item = ResizablePixmapItem(source)
         self.window.scene.add_pasted_item(item)
+        export_rect = self.window.scene.sceneRect().toAlignedRect()
         observed: list[tuple[bool, int]] = []
 
         def complete() -> None:
@@ -145,9 +162,8 @@ class CanvasWindowCompletionTests(unittest.TestCase):
         self.assertEqual(observed, [(True, 0)])
         self.assertTrue(self.window.isHidden())
         copied = QApplication.clipboard().image()
-        self.assertEqual(copied.size().width(), CANVAS_WIDTH)
-        self.assertEqual(copied.size().height(), CANVAS_HEIGHT)
-        self.assertEqual(copied.pixelColor(600, 400), QColor("#c03050"))
+        self.assertEqual(copied.size(), export_rect.size())
+        self.assertEqual(copied.pixelColor(export_rect.center()), QColor("#c03050"))
 
         fresh = CanvasWindow()
         try:
@@ -231,6 +247,7 @@ class CanvasWindowCompletionTests(unittest.TestCase):
         QApplication.sendEvent(self.window.view.viewport(), double_click)
         QApplication.processEvents()
         self.assertTrue(text.editing)
+        text_bounds = text.sceneBoundingRect().toAlignedRect()
         completed: list[str] = []
 
         def complete() -> None:
@@ -248,12 +265,16 @@ class CanvasWindowCompletionTests(unittest.TestCase):
 
         self.assertEqual(completed, ["keep this text"])
         copied = QApplication.clipboard().image()
-        self.assertFalse(copied.isNull())
+        visible_text_bounds = text_bounds.intersected(copied.rect())
         self.assertTrue(
             any(
                 copied.pixelColor(x, y) != QColor(Qt.GlobalColor.white)
-                for y in range(370, 430)
-                for x in range(500, 700)
+                for y in range(
+                    visible_text_bounds.top(), visible_text_bounds.bottom() + 1
+                )
+                for x in range(
+                    visible_text_bounds.left(), visible_text_bounds.right() + 1
+                )
             )
         )
 

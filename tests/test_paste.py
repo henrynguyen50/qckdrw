@@ -12,7 +12,7 @@ from PySide6.QtTest import QTest
 
 from qckdrw.canvas.commands import StrokeItem
 from qckdrw.canvas.items import EditableTextItem, ResizablePixmapItem
-from qckdrw.canvas.scene import CANVAS_HEIGHT, CANVAS_WIDTH, CanvasScene
+from qckdrw.canvas.scene import CanvasScene
 from qckdrw.window import CanvasWindow
 
 
@@ -117,7 +117,14 @@ class PasteTests(unittest.TestCase):
         )
 
     def test_mixed_content_snapshot_preserves_order_positions_and_rendering(self) -> None:
+        self.window.show()
+        QApplication.processEvents()
+        self.window.resize(837, 613)
+        QApplication.processEvents()
+
         scene = self.window.scene
+        canvas_size = self.window.view.viewport().size()
+        self.assertEqual(scene.sceneRect().size().toSize(), canvas_size)
 
         source = QImage(80, 60, QImage.Format.Format_ARGB32_Premultiplied)
         source.fill(QColor("#d04020"))
@@ -143,36 +150,48 @@ class PasteTests(unittest.TestCase):
         self.window.dismissed.connect(
             lambda: snapshots.append(self.window.serialize_document())
         )
-        self.window.show()
-        QApplication.processEvents()
         self.window.hide()
         QApplication.processEvents()
         self.assertEqual(len(snapshots), 1)
-        document = snapshots[0]
-        restored = CanvasScene()
+
+        restored = CanvasWindow(snapshots[0])
         try:
-            restored.restore_document(document)
-            restored.clearSelection()
+            restored.show()
+            QApplication.processEvents()
+            restored.scene.clearSelection()
+            self.assertEqual(restored.view.viewport().size(), canvas_size)
+            self.assertEqual(
+                restored.scene.sceneRect().size().toSize(), canvas_size
+            )
             ordered_types = [
                 type(item)
-                for item in restored.items(Qt.SortOrder.AscendingOrder)
+                for item in restored.scene.items(Qt.SortOrder.AscendingOrder)
             ]
             self.assertEqual(
                 ordered_types,
                 [ResizablePixmapItem, StrokeItem, EditableTextItem],
             )
-            restored_stroke = self._items_of_type(restored, StrokeItem)[0]
+            restored_stroke = self._items_of_type(
+                restored.scene, StrokeItem
+            )[0]
             self.assertEqual(restored_stroke.pos(), QPointF(25.0, 15.0))
-            self.assertEqual(self._render(restored), before)
+            self.assertEqual(self._render(restored.scene), before)
+            restored.resize(791, 571)
+            QApplication.processEvents()
+            self.assertEqual(
+                restored.scene.sceneRect().size().toSize(),
+                restored.view.viewport().size(),
+            )
         finally:
             restored.release_resources()
             restored.deleteLater()
 
     @staticmethod
     def _render(scene: CanvasScene) -> QImage:
+        canvas_size = scene.sceneRect().size().toSize()
         image = QImage(
-            CANVAS_WIDTH,
-            CANVAS_HEIGHT,
+            canvas_size.width(),
+            canvas_size.height(),
             QImage.Format.Format_ARGB32_Premultiplied,
         )
         image.fill(Qt.GlobalColor.white)

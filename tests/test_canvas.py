@@ -10,8 +10,10 @@ from PySide6.QtGui import QImage, QMouseEvent, QPainter
 from PySide6.QtWidgets import QApplication
 
 from qckdrw.canvas.commands import StrokeItem
+from qckdrw.canvas.items import EditableTextItem
 from qckdrw.canvas.scene import CanvasScene
 from qckdrw.canvas.view import CanvasView
+from qckdrw.window import CanvasWindow
 
 
 class CanvasViewTests(unittest.TestCase):
@@ -150,6 +152,96 @@ class CanvasViewTests(unittest.TestCase):
         self.assertEqual(len(strokes), 1)
         self.assertPathPoints(strokes[0], [(100, 100), (200, 180), (300, 120)])
 
+    def test_text_click_adds_an_editable_item_and_switches_to_select(self) -> None:
+        changes: list[str] = []
+        self.view.tool_changed.connect(changes.append)
+        self.view.set_tool("text")
+
+        position = (240.0, 180.0)
+        self._click(position)
+
+        text_items = [
+            item for item in self.scene.items() if isinstance(item, EditableTextItem)
+        ]
+        self.assertEqual(len(text_items), 1)
+        item = text_items[0]
+        self.assertEqual(item.pos(), QPointF(*position))
+        self.assertTrue(item.editing)
+        self.assertTrue(item.isSelected())
+        self.assertEqual(self.scene.focusItem(), item)
+        self.assertEqual(self.view.tool, "select")
+        self.assertEqual(changes, ["text", "select"])
+        self.assertEqual(self.scene.undo_stack.count(), 1)
+
+        item.setPlainText("A meaningful canvas note")
+        item.finish_editing()
+        self.assertEqual(self.scene.undo_stack.count(), 2)
+        self.scene.undo_stack.undo()
+        self.assertEqual(item.toPlainText(), "")
+        self.scene.undo_stack.undo()
+        self.assertIsNone(item.scene())
+        self.scene.undo_stack.redo()
+        self.scene.undo_stack.redo()
+        self.assertEqual(item.toPlainText(), "A meaningful canvas note")
+
+        document = self.scene.serialize_document()
+        restored = CanvasScene()
+        try:
+            restored.restore_document(document)
+            restored_text = [
+                candidate
+                for candidate in restored.items()
+                if isinstance(candidate, EditableTextItem)
+            ]
+            self.assertEqual(len(restored_text), 1)
+            self.assertEqual(
+                restored_text[0].toPlainText(), "A meaningful canvas note"
+            )
+            self.assertEqual(restored_text[0].pos(), QPointF(*position))
+        finally:
+            restored.release_resources()
+            restored.deleteLater()
+
+    def test_resize_uses_viewport_pixels_and_persists_canvas_dimensions(self) -> None:
+        self.assertTrue(self.view.transform().isIdentity())
+        self.assertEqual(
+            self.scene.sceneRect().size().toSize(), self.view.viewport().size()
+        )
+
+        self.view.resize(713, 509)
+        QApplication.processEvents()
+
+        resized = self.view.viewport().size()
+        self.assertEqual(self.scene.sceneRect().size().toSize(), resized)
+        self.assertTrue(self.view.transform().isIdentity())
+
+        restored = CanvasScene()
+        try:
+            restored.restore_document(self.scene.serialize_document())
+            self.assertEqual(restored.sceneRect().size().toSize(), resized)
+        finally:
+            restored.release_resources()
+            restored.deleteLater()
+
+    def test_view_tool_signal_keeps_window_toolbar_selection_in_sync(self) -> None:
+        window = CanvasWindow()
+        window.show()
+        QApplication.processEvents()
+        try:
+            window._text_action.trigger()
+            self.assertEqual(window.view.tool, "text")
+            self.assertTrue(window._text_action.isChecked())
+            self.assertFalse(window._draw_action.isChecked())
+            self.assertIn("click the canvas", window.statusBar().currentMessage())
+
+            window.view.set_tool("select")
+            self.assertTrue(window._select_action.isChecked())
+            self.assertFalse(window._text_action.isChecked())
+        finally:
+            window.release_resources()
+            window.deleteLater()
+            QApplication.processEvents()
+
     def test_undo_redo_and_snapshot_preserve_full_geometry(self) -> None:
         expected = [(120, 130), (220, 210), (310, 110), (410, 190)]
         self._click(expected[0])
@@ -180,8 +272,12 @@ class CanvasViewTests(unittest.TestCase):
         self.assertEqual(len(strokes), 1)
         self.assertEqual(strokes[0].path().elementCount(), 2)
 
-        image = QImage(1200, 800, QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(Qt.GlobalColor.white)
+        canvas_size = self.scene.sceneRect().size().toSize()
+        image = QImage(
+            canvas_size.width(),
+            canvas_size.height(),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
         painter = QPainter(image)
         self.scene.render(painter)
         painter.end()

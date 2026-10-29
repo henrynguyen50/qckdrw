@@ -4,16 +4,13 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QClipboard, QGuiApplication, QImage, QPainter
 from PySide6.QtWidgets import QGraphicsScene
 
-from qckdrw.canvas.scene import CANVAS_HEIGHT, CANVAS_WIDTH
-
-_CANVAS_RECT = QRectF(0.0, 0.0, float(CANVAS_WIDTH), float(CANVAS_HEIGHT))
-
 
 def render_canvas(scene: QGraphicsScene) -> QImage:
-    """Render the fixed logical canvas eagerly onto an opaque white image."""
+    """Render the scene's logical canvas eagerly onto an opaque white image."""
+    canvas_rect = scene.sceneRect()
     image = QImage(
-        CANVAS_WIDTH,
-        CANVAS_HEIGHT,
+        int(canvas_rect.width()),
+        int(canvas_rect.height()),
         QImage.Format.Format_ARGB32_Premultiplied,
     )
     if image.isNull():
@@ -33,7 +30,7 @@ def render_canvas(scene: QGraphicsScene) -> QImage:
             scene.render(
                 painter,
                 QRectF(image.rect()),
-                _CANVAS_RECT,
+                canvas_rect,
                 Qt.AspectRatioMode.IgnoreAspectRatio,
             )
         finally:
